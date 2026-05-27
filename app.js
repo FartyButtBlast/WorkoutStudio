@@ -1,54 +1,118 @@
-const seedActivities = [
-  { id: "act-squat", name: "Back Squat", type: "Weight lifting", muscles: ["quads", "glutes", "core"], defaults: { sets: 4, reps: 8, load: 80 } },
-  { id: "act-deadlift", name: "Deadlift", type: "Weight lifting", muscles: ["hamstrings", "glutes", "back"], defaults: { sets: 3, reps: 5, load: 100 } },
-  { id: "act-bench", name: "Bench Press", type: "Weight lifting", muscles: ["chest", "triceps", "shoulders"], defaults: { sets: 4, reps: 8, load: 60 } },
-  { id: "act-row", name: "Seated Row", type: "Weight lifting", muscles: ["back", "biceps"], defaults: { sets: 3, reps: 10, load: 45 } },
-  { id: "act-lunge", name: "Walking Lunge", type: "Weight lifting", muscles: ["quads", "glutes"], defaults: { sets: 3, reps: 12, load: 20 } },
-  { id: "act-plank", name: "Plank", type: "Stretching", muscles: ["core", "shoulders"], defaults: { sets: 3, time: 45 } },
-  { id: "act-hamstring", name: "Hamstring Stretch", type: "Stretching", muscles: ["hamstrings"], defaults: { sets: 2, time: 40 } },
-  { id: "act-hip", name: "Hip Flexor Stretch", type: "Stretching", muscles: ["quads", "core"], defaults: { sets: 2, time: 35 } },
-  { id: "act-run", name: "Treadmill Run", type: "Cardio", muscles: ["quads", "hamstrings", "calves"], defaults: { time: 20, distance: 3 } },
-  { id: "act-bike", name: "Stationary Bike", type: "Cardio", muscles: ["quads", "calves"], defaults: { time: 25, distance: 10 } },
-  { id: "act-rower", name: "Rowing Machine", type: "Cardio", muscles: ["back", "biceps", "quads"], defaults: { time: 15, distance: 3 } }
-];
-
-const starterWorkouts = [
-  {
-    id: "wo-leg-day",
-    name: "Leg Day",
-    goal: "Strength and lower body volume",
-    activities: [
-      templateActivity("act-squat"),
-      templateActivity("act-deadlift"),
-      templateActivity("act-lunge"),
-      templateActivity("act-hamstring")
-    ]
-  },
-  {
-    id: "wo-cardio-core",
-    name: "Cardio + Core",
-    goal: "Conditioning with trunk stability",
-    activities: [templateActivity("act-run"), templateActivity("act-plank"), templateActivity("act-bike")]
+const activityTypeTags = ["Weight lifting", "Cardio", "Stretching"];
+const allowedMuscleTags = ["chest", "back", "shoulders", "biceps", "triceps", "abs", "glutes", "quads", "hamstrings", "calves", "cardio"];
+const supabaseProjectUrl = "https://npllwuavofpfudchotma.supabase.co";
+const supabaseAnonKey = "sb_publishable_q_yZF9APuTUsGfHu8N7avA_QbAxS3KY";
+const authClient = window.supabase?.createClient(supabaseProjectUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
   }
-];
+});
+const trainingPeaksSource = Array.isArray(window.trainingPeaksExercises) ? window.trainingPeaksExercises : [];
+const seedActivities = trainingPeaksSource.map((exercise, index) => {
+  const type = typeForTrainingPeaksCategory(exercise.category);
+  const muscleTags = normalizeMuscleTags(exercise.muscleTags?.length ? exercise.muscleTags : [...(exercise.primaryMuscles || []), ...(exercise.secondaryMuscles || [])]);
+  return {
+    id: `tp-${String(index + 1).padStart(4, "0")}-${slugifyExerciseName(exercise.name)}`,
+    name: exercise.name,
+    description: exercise.description || defaultExerciseDescription(exercise.name, type, muscleTags),
+    tags: normalizeActivityTags(type, muscleTags),
+    defaults: defaultActivityTarget(type),
+    source: "TrainingPeaks",
+    builtIn: true,
+    confidence: exercise.confidence || ""
+  };
+});
+
+const legacyActivityNameById = {
+  "act-squat": "Back Squat",
+  "act-deadlift": "Deadlift",
+  "act-bench": "Bench Press",
+  "act-row": "Cable Seated Row",
+  "act-lunge": "Body Weight Walking Lunge",
+  "act-plank": "Plank",
+  "act-hamstring": "Lying Hamstring Stretch with Band",
+  "act-hip": "Hip Flexor Stretch",
+  "act-run": "Jog In Place",
+  "act-bike": "Stationary Bike",
+  "act-rower": "Rowing"
+};
 
 const muscleLabels = {
-  shoulders: "Shoulders",
   chest: "Chest",
+  back: "Back",
+  shoulders: "Shoulders",
   biceps: "Biceps",
   triceps: "Triceps",
-  back: "Back",
-  core: "Core",
+  abs: "Abs",
   glutes: "Glutes",
   quads: "Quads",
   hamstrings: "Hamstrings",
-  calves: "Calves"
+  calves: "Calves",
+  cardio: "Cardio"
 };
+
+const filterTagOptions = [
+  ...activityTypeTags.map((tag) => ({ id: tag, label: tag })),
+  ...Object.entries(muscleLabels)
+    .filter(([id]) => id !== "cardio")
+    .map(([id, label]) => ({ id, label }))
+];
+
+function typeForTrainingPeaksCategory(category) {
+  if (category === "cardio") return "Cardio";
+  if (category === "mobility") return "Stretching";
+  return "Weight lifting";
+}
+
+function normalizeMuscleTags(tags = []) {
+  return [...new Set(tags.map((tag) => tag === "core" ? "abs" : tag).filter((tag) => allowedMuscleTags.includes(tag)))];
+}
+
+function normalizeActivityTags(type = "Weight lifting", muscleTags = []) {
+  const tags = [activityTypeTags.includes(type) ? type : "Weight lifting"];
+  normalizeMuscleTags(muscleTags).forEach((tag) => tags.push(tag === "cardio" ? "Cardio" : tag));
+  return [...new Set(tags)];
+}
+
+function defaultExerciseDescription(name, type, muscleTags = []) {
+  const focus = formatTagList(normalizeMuscleTags(muscleTags).filter((tag) => tag !== "cardio"));
+  if (type === "Cardio") {
+    return `Instructions: Complete ${name} at the programmed effort or duration. Keep the rhythm smooth, maintain controlled breathing, and adjust pace so the set matches the workout target.`;
+  }
+  if (type === "Stretching") {
+    return `Instructions: Move through ${name} slowly and stay within a comfortable range. Keep breathing steady, control the position around ${focus}, and stop before any sharp discomfort.`;
+  }
+  return `Instructions: Set up for ${name} as prescribed in the workout. Move through the programmed range with control, keep posture steady, and match the load or reps to the workout target while focusing on ${focus}.`;
+}
+
+function formatTagList(tags) {
+  const labels = tags.map((tag) => muscleLabels[tag] || tag.toLowerCase());
+  if (!labels.length) return "general movement quality";
+  if (labels.length === 1) return labels[0].toLowerCase();
+  return `${labels.slice(0, -1).map((label) => label.toLowerCase()).join(", ")} and ${labels.at(-1).toLowerCase()}`;
+}
+
+function slugifyExerciseName(name) {
+  return String(name)
+    .toLowerCase()
+    .replaceAll("&", "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function seedActivityIdByName(name) {
+  return seedActivities.find((activity) => activity.name === name)?.id || seedActivities[0]?.id || "";
+}
 
 const state = {
   screen: "dashboard",
   authMode: "login",
+  authLoading: true,
+  passwordRecovery: false,
   currentUserId: null,
+  pendingVerificationEmail: "",
   selectedWorkoutId: null,
   workoutsMode: "list",
   libraryFilter: "all",
@@ -61,10 +125,18 @@ const state = {
   sessionStartedAt: null,
   tick: null,
   modal: null,
-  toast: ""
+  toast: "",
+  librarySearch: "",
+  libraryTagFilters: [],
+  librarySort: "name",
+  pickerSearch: "",
+  pickerSourceFilter: "all",
+  pickerTagFilters: [],
+  pickerSort: "name"
 };
 
 const store = loadStore();
+let toastTimer = null;
 
 function templateActivity(activityId) {
   const source = seedActivities.find((item) => item.id === activityId) || activityById(activityId);
@@ -85,17 +157,10 @@ function templateActivity(activityId) {
 function loadStore() {
   const stored = localStorage.getItem("workoutstudio-store") || localStorage.getItem("liftlog-store");
   if (stored) return normalizeStore(JSON.parse(stored));
-  const demoUser = {
-    id: "user-demo",
-    name: "Demo Athlete",
-    email: "demo@workoutstudio.local",
-    password: "demo123",
-    verified: true
-  };
   const initial = {
-    users: [demoUser],
+    users: [],
     activities: seedActivities,
-    workouts: starterWorkouts.map((workout) => ({ ...workout, userId: demoUser.id })),
+    workouts: [],
     sessions: []
   };
   localStorage.setItem("workoutstudio-store", JSON.stringify(initial));
@@ -108,11 +173,138 @@ function saveStore() {
 
 function normalizeStore(data) {
   data.users = data.users || [];
+  data.activities = data.activities || [];
+  data.workouts = data.workouts || [];
+  data.sessions = data.sessions || [];
+  const previousActivitiesById = new Map(data.activities.map((activity) => [activity.id, activity]));
   data.users.forEach((user) => {
     if (user.email === "demo@liftlog.local") user.email = "demo@workoutstudio.local";
+    delete user.password;
+    delete user.verificationCode;
+  });
+  const customActivities = data.activities
+    .filter((activity) => isCustomActivityData(activity))
+    .map((activity) => {
+      const tags = activityTags(activity);
+      const { type, muscles, ...rest } = activity;
+      return {
+        ...rest,
+        description: activity.description || "",
+        tags,
+        defaults: activity.defaults || defaultActivityTarget(typeFromTags(tags))
+      };
+    });
+  data.activities = [...seedActivities, ...customActivities];
+  data.workouts.forEach((workout) => {
+    workout.activities = (workout.activities || []).map((activity) => ({
+      ...activity,
+      activityId: replacementActivityId(activity.activityId, previousActivitiesById)
+    }));
+  });
+  data.sessions.forEach((session) => {
+    session.entries = (session.entries || []).map((entry) => ({
+      ...entry,
+      activityId: replacementActivityId(entry.activityId, previousActivitiesById),
+      muscles: normalizeMuscleTags(entry.muscles || [])
+    }));
   });
   localStorage.setItem("workoutstudio-store", JSON.stringify(data));
   return data;
+}
+
+function replacementActivityId(activityId, previousActivitiesById) {
+  if (seedActivities.some((activity) => activity.id === activityId)) return activityId;
+  const legacyName = legacyActivityNameById[activityId];
+  if (legacyName) return seedActivityIdByName(legacyName);
+  const previousActivity = previousActivitiesById.get(activityId);
+  if (!previousActivity || isCustomActivityData(previousActivity)) return activityId;
+  return seedActivityIdByName(previousActivity.name);
+}
+
+async function initAuth() {
+  if (!authClient) {
+    state.authLoading = false;
+    render();
+    showToast("Supabase Auth could not load. Check the app connection.");
+    return;
+  }
+  authClient.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") {
+      enterPasswordRecovery();
+      return;
+    }
+    if (state.passwordRecovery && event !== "SIGNED_OUT") return;
+    applyAuthSession(session, true);
+  });
+  const { data } = await authClient.auth.getSession();
+  if (isPasswordRecoveryUrl()) {
+    enterPasswordRecovery();
+    return;
+  }
+  applyAuthSession(data.session, false);
+}
+
+function applyAuthSession(session, shouldRender = true) {
+  state.authLoading = false;
+  if (!session?.user) {
+    state.currentUserId = null;
+    if (shouldRender) render();
+    return;
+  }
+  if (state.passwordRecovery) {
+    if (shouldRender) render();
+    return;
+  }
+  const user = ensureLocalUser(session.user);
+  state.currentUserId = user.id;
+  state.pendingVerificationEmail = "";
+  state.authMode = "login";
+  state.selectedWorkoutId = userWorkouts()[0]?.id || null;
+  showFirstWorkoutPromptIfNeeded();
+  saveStore();
+  if (shouldRender) render();
+}
+
+function isPasswordRecoveryUrl() {
+  const urlText = `${window.location.search} ${window.location.hash}`.toLowerCase();
+  return urlText.includes("type=recovery") || urlText.includes("auth=recovery");
+}
+
+function enterPasswordRecovery() {
+  state.authLoading = false;
+  state.passwordRecovery = true;
+  state.currentUserId = null;
+  state.authMode = "update-password";
+  render();
+}
+
+function ensureLocalUser(authUser) {
+  const name = authUser.user_metadata?.name || authUser.email?.split("@")[0] || "Athlete";
+  let user = store.users.find((item) => item.id === authUser.id);
+  if (!user) {
+    user = {
+      id: authUser.id,
+      name,
+      email: authUser.email,
+      verified: Boolean(authUser.email_confirmed_at || authUser.confirmed_at),
+      verifiedAt: authUser.email_confirmed_at || authUser.confirmed_at || null
+    };
+    store.users.push(user);
+  } else {
+    user.name = user.name || name;
+    user.email = authUser.email || user.email;
+    user.verified = Boolean(authUser.email_confirmed_at || authUser.confirmed_at || user.verified);
+    user.verifiedAt = authUser.email_confirmed_at || authUser.confirmed_at || user.verifiedAt || null;
+  }
+  return user;
+}
+
+function showFirstWorkoutPromptIfNeeded() {
+  if (userWorkouts().length) return;
+  state.screen = "workouts";
+  state.workoutsMode = "list";
+  state.selectedWorkoutId = null;
+  state.modal = { type: "workout", workout: null, onboarding: true };
 }
 
 function currentUser() {
@@ -140,29 +332,134 @@ function availableActivities() {
 }
 
 function libraryActivities() {
-  const activities = availableActivities();
-  if (state.libraryFilter === "custom") return activities.filter((activity) => isCustomActivity(activity));
-  return activities;
+  const search = state.librarySearch.trim().toLowerCase();
+  return availableActivities()
+    .filter((activity) => state.libraryFilter === "all" || (state.libraryFilter === "custom" ? isCustomActivity(activity) : !isCustomActivityData(activity)))
+    .filter((activity) => hasSelectedTags(activity, state.libraryTagFilters))
+    .filter((activity) => !search || activity.name.toLowerCase().includes(search))
+    .sort(compareLibraryActivities);
+}
+
+function compareLibraryActivities(a, b) {
+  if (state.librarySort === "type") return activityType(a).localeCompare(activityType(b)) || a.name.localeCompare(b.name);
+  if (state.librarySort === "muscle") return primaryDisplayMuscle(a).localeCompare(primaryDisplayMuscle(b)) || a.name.localeCompare(b.name);
+  return a.name.localeCompare(b.name);
+}
+
+function primaryDisplayMuscle(activity) {
+  const muscles = activityMuscles(activity);
+  return muscles.find((muscle) => muscle !== "cardio") || muscles[0] || "";
+}
+
+function pickerActivities() {
+  const search = state.pickerSearch.trim().toLowerCase();
+  return availableActivities()
+    .filter((activity) => state.pickerSourceFilter === "all" || (state.pickerSourceFilter === "custom" ? isCustomActivity(activity) : !isCustomActivityData(activity)))
+    .filter((activity) => hasSelectedTags(activity, state.pickerTagFilters))
+    .filter((activity) => !search || activity.name.toLowerCase().includes(search))
+    .sort(comparePickerActivities);
+}
+
+function hasSelectedTags(activity, selectedTags) {
+  const tags = activityTags(activity);
+  return !selectedTags.length || selectedTags.every((tag) => tags.includes(tag));
+}
+
+function comparePickerActivities(a, b) {
+  if (state.pickerSort === "source") return sourceLabel(a).localeCompare(sourceLabel(b)) || a.name.localeCompare(b.name);
+  if (state.pickerSort === "type") return activityType(a).localeCompare(activityType(b)) || a.name.localeCompare(b.name);
+  if (state.pickerSort === "muscle") return primaryDisplayMuscle(a).localeCompare(primaryDisplayMuscle(b)) || a.name.localeCompare(b.name);
+  return a.name.localeCompare(b.name);
+}
+
+function sourceLabel(activity) {
+  return isCustomActivityData(activity) ? "Custom" : "Built-in";
+}
+
+function toggleTagFilter(selectedTags, tag) {
+  if (tag === "all") return [];
+  if (selectedTags.includes(tag)) return selectedTags.filter((item) => item !== tag);
+  return [...selectedTags, tag];
+}
+
+function activityTags(activity) {
+  if (Array.isArray(activity.tags) && activity.tags.length) return normalizeStoredTags(activity.tags);
+  return normalizeActivityTags(activity.type, activity.muscles || []);
+}
+
+function normalizeStoredTags(tags = []) {
+  return [...new Set(tags.map((tag) => tag === "core" ? "abs" : tag).map((tag) => tag === "cardio" ? "Cardio" : tag).filter((tag) => activityTypeTags.includes(tag) || allowedMuscleTags.includes(tag)))];
+}
+
+function activityType(activity) {
+  return typeFromTags(activityTags(activity));
+}
+
+function typeFromTags(tags = []) {
+  return activityTypeTags.find((tag) => tags.includes(tag)) || "Weight lifting";
+}
+
+function activityMuscles(activity) {
+  return activityTags(activity)
+    .map((tag) => tag === "Cardio" ? "cardio" : tag)
+    .filter((tag) => allowedMuscleTags.includes(tag));
+}
+
+function tagLabel(tag) {
+  return muscleLabels[tag] || tag;
 }
 
 function isCustomActivity(activity) {
-  return activity.custom || activity.userId === state.currentUserId;
+  return isCustomActivityData(activity) && (!activity.userId || activity.userId === state.currentUserId);
+}
+
+function isCustomActivityData(activity) {
+  return Boolean(activity?.custom || activity?.userId);
 }
 
 function render() {
   const app = document.querySelector("#app");
-  app.innerHTML = state.currentUserId ? renderShell() : renderAuth();
+  app.innerHTML = state.currentUserId && !state.passwordRecovery ? renderShell() : renderAuth();
   bindEvents();
 }
 
 function renderAuth() {
-  const title = state.authMode === "login" ? "Welcome back" : state.authMode === "register" ? "Create your account" : "Reset password";
+  if (state.authLoading) {
+    return `
+      <section class="auth-page">
+        <div class="auth-box">
+          <div class="brand"><span class="mark">WS</span><span>WorkoutStudio</span></div>
+          <div>
+            <p class="eyebrow">Secure sign in</p>
+            <h1>Opening WorkoutStudio...</h1>
+            <p class="muted">Checking your sign-in session.</p>
+          </div>
+        </div>
+        <div class="auth-art" aria-hidden="true"></div>
+      </section>
+      ${renderToast()}
+    `;
+  }
+  const title =
+    state.authMode === "login"
+      ? "Welcome back"
+      : state.authMode === "register"
+        ? "Create your account"
+        : state.authMode === "verify"
+          ? "Verify your email"
+          : state.authMode === "update-password"
+            ? "Set a new password"
+            : "Reset password";
   const subtitle =
     state.authMode === "login"
       ? "Sign in to manage templates, start sessions, and compare your training history."
       : state.authMode === "register"
-        ? "Registration includes a demo email verification step so the SaaS flow is visible."
-        : "Enter your email and the app will simulate a reset link.";
+        ? "Create an account and confirm your email before opening WorkoutStudio."
+        : state.authMode === "verify"
+          ? "Use the confirmation link sent to your inbox, then return here to log on."
+          : state.authMode === "update-password"
+            ? "Choose a new password for your account."
+            : "Enter your email and WorkoutStudio will send a reset link.";
   return `
     <section class="auth-page">
       <div class="auth-box">
@@ -172,13 +469,14 @@ function renderAuth() {
           <h1>${title}</h1>
           <p class="muted">${subtitle}</p>
         </div>
-        <div class="tabs">
-          <button data-auth-tab="login" class="${state.authMode === "login" ? "active" : ""}">Logon</button>
-          <button data-auth-tab="register" class="${state.authMode === "register" ? "active" : ""}">Register</button>
-          <button data-auth-tab="reset" class="${state.authMode === "reset" ? "active" : ""}">Reset</button>
-        </div>
+        ${state.authMode === "update-password" ? "" : `
+          <div class="tabs">
+            <button data-auth-tab="login" class="${state.authMode === "login" ? "active" : ""}">Logon</button>
+            <button data-auth-tab="register" class="${state.authMode === "register" ? "active" : ""}">Register</button>
+            <button data-auth-tab="reset" class="${state.authMode === "reset" ? "active" : ""}">Reset</button>
+          </div>
+        `}
         ${renderAuthForm()}
-        <p class="muted">Demo login: demo@workoutstudio.local / demo123</p>
       </div>
       <div class="auth-art" aria-hidden="true"></div>
     </section>
@@ -187,10 +485,19 @@ function renderAuth() {
 }
 
 function renderAuthForm() {
+  if (state.authMode === "update-password") {
+    return `
+      <form class="form" data-action="update-password">
+        <label>New password<input name="password" type="password" minlength="6" required placeholder="At least 6 characters" /></label>
+        <label>Confirm password<input name="confirmPassword" type="password" minlength="6" required placeholder="Retype your password" /></label>
+        <button class="btn" type="submit">Update password</button>
+      </form>
+    `;
+  }
   if (state.authMode === "reset") {
     return `
       <form class="form" data-action="reset">
-        <label>Email<input name="email" type="email" required value="demo@workoutstudio.local" /></label>
+        <label>Email<input name="email" type="email" required placeholder="alex@example.com" /></label>
         <button class="btn" type="submit">Send reset link</button>
       </form>
     `;
@@ -205,10 +512,19 @@ function renderAuthForm() {
       </form>
     `;
   }
+  if (state.authMode === "verify") {
+    return `
+      <div class="form verify-panel">
+        <label>Email<input type="email" readonly value="${escapeAttr(state.pendingVerificationEmail)}" /></label>
+        <p class="muted">Check your inbox for the verification email. Once the email is confirmed, use Logon to continue.</p>
+        <button class="btn" type="button" data-auth-tab="login">Go to logon</button>
+      </div>
+    `;
+  }
   return `
     <form class="form" data-action="login">
-      <label>Email<input name="email" type="email" required value="demo@workoutstudio.local" /></label>
-      <label>Password<input name="password" type="password" required value="demo123" /></label>
+      <label>Email<input name="email" type="email" required placeholder="alex@example.com" /></label>
+      <label>Password<input name="password" type="password" required placeholder="Your password" /></label>
       <button class="btn" type="submit">Logon</button>
     </form>
   `;
@@ -232,7 +548,7 @@ function renderShell() {
         ${renderScreen()}
       </section>
       <nav class="bottom-nav">
-        ${navButton("dashboard", "Home")}
+        ${navButton("dashboard", "Dashboard")}
         ${navButton("workouts", "Workouts")}
         ${navButton("session", "Session")}
         ${navButton("activities", "Library")}
@@ -244,14 +560,11 @@ function renderShell() {
 }
 
 function renderHeaderAdd() {
-  if (state.screen === "activities") {
-    return `<button class="header-add" data-modal="library-activity" aria-label="New library activity" title="New library activity">+</button>`;
-  }
   if (state.screen !== "workouts") return "";
   if (state.workoutsMode === "detail" && selectedWorkout()) {
-    return `<button class="header-add" data-modal="activity" data-workout-id="${selectedWorkout().id}" aria-label="Add activity" title="Add activity">+</button>`;
+    return `<button class="header-back" data-workouts-list aria-label="Back to workouts" title="Back to workouts">Back</button>`;
   }
-  return `<button class="header-add" data-modal="workout" aria-label="New workout" title="New workout">+</button>`;
+  return "";
 }
 
 function navButton(screen, label) {
@@ -275,7 +588,7 @@ function renderDashboard() {
     <div class="topbar">
       <div>
         <p class="eyebrow">Training command centre</p>
-        <h1>Workout history.</h1>
+        <h1>Dashboard.</h1>
       </div>
       <button class="btn primary-action" data-screen="session">Start workout</button>
     </div>
@@ -285,7 +598,7 @@ function renderDashboard() {
       <div class="panel stat"><span class="muted">Training minutes</span><strong>${totalMinutes}</strong></div>
     </div>
     <div class="panel grid">
-      <div class="toolbar"><h2>Completed workouts</h2><button class="btn secondary" data-screen="workouts">Manage templates</button></div>
+      <h2>Completed workouts</h2>
       <div class="list">
         ${sessions.length ? sessions.map((session) => renderSessionHistoryRow(session)).join("") : `<div class="empty">Complete a session and your workout history will appear here.</div>`}
       </div>
@@ -388,7 +701,6 @@ function renderWorkouts() {
     return `
       <div class="topbar manage-topbar">
         <div>
-          <button class="btn ghost back-action" data-workouts-list>Back</button>
           <p class="eyebrow">Manage workout</p>
           <h1>${escapeHtml(workout.name)}</h1>
           <p class="muted">${escapeHtml(workout.goal || "No goal set")}</p>
@@ -408,7 +720,16 @@ function renderWorkouts() {
     </div>
     <div class="panel grid">
       <h2>Your workouts</h2>
-      <div class="list">${workouts.length ? workouts.map((workout) => renderWorkoutRow(workout)).join("") : `<div class="empty">No workouts yet.</div>`}</div>
+      <button class="btn workouts-create" data-modal="workout">Create workout</button>
+      <div class="list">${workouts.length ? workouts.map((workout) => renderWorkoutRow(workout)).join("") : renderEmptyWorkouts()}</div>
+    </div>
+  `;
+}
+
+function renderEmptyWorkouts() {
+  return `
+    <div class="empty">
+      <span>No workouts yet.</span>
     </div>
   `;
 }
@@ -462,6 +783,7 @@ function renderWorkoutDetail(workout) {
     <div class="grid">
       <div class="toolbar">
         <button class="btn" data-start-workout="${workout.id}">Start workout</button>
+        <button class="btn secondary" data-modal="activity" data-workout-id="${workout.id}">Add exercise</button>
         <button class="btn secondary" data-edit-workout="${workout.id}">Edit details</button>
       </div>
       <div class="list">
@@ -473,7 +795,8 @@ function renderWorkoutDetail(workout) {
 
 function renderTemplateActivity(workout, item) {
   const activity = activityById(item.activityId);
-  const fields = templateFields(activity.type);
+  const type = activityType(activity);
+  const fields = templateFields(type);
   const isOpen = state.openSwipeActivityId === item.id;
   return `
     <div class="swipe-activity ${isOpen ? "open" : ""}" data-swipe-activity="${item.id}">
@@ -482,13 +805,13 @@ function renderTemplateActivity(workout, item) {
         <div class="toolbar">
           <div>
             <h3>${activity.name}</h3>
-            <p class="muted">${activity.type}</p>
+            <p class="muted">${type}</p>
           </div>
         </div>
         <div class="template-fields">
           ${fields.map((field) => renderTemplateField(workout.id, item, field)).join("")}
         </div>
-        <div class="chips">${activity.muscles.map((muscle) => `<span class="chip gold">${muscleLabels[muscle]}</span>`).join("")}</div>
+        <div class="chips">${activityTags(activity).map((tag) => `<span class="chip gold">${tagLabel(tag)}</span>`).join("")}</div>
       </article>
     </div>
   `;
@@ -511,6 +834,7 @@ function renderTemplateField(workoutId, item, field) {
 
 function renderActivities() {
   const activities = libraryActivities();
+  const total = availableActivities().length;
   return `
     <div class="topbar">
       <div>
@@ -519,12 +843,60 @@ function renderActivities() {
         <p class="muted">Library entries can be used across workout templates.</p>
       </div>
     </div>
-    <div class="tabs library-filter">
-      <button data-library-filter="all" class="${state.libraryFilter === "all" ? "active" : ""}">All</button>
-      <button data-library-filter="custom" class="${state.libraryFilter === "custom" ? "active" : ""}">Custom</button>
+    <div class="panel library-tools">
+      <div class="tabs library-filter">
+        <button data-library-filter="all" class="${state.libraryFilter === "all" ? "active" : ""}">All</button>
+        <button data-library-filter="built-in" class="${state.libraryFilter === "built-in" ? "active" : ""}">Built-in</button>
+        <button data-library-filter="custom" class="${state.libraryFilter === "custom" ? "active" : ""}">Custom</button>
+      </div>
+      ${state.libraryFilter === "custom" ? `<button class="btn library-create" type="button" data-modal="library-activity">Create exercise</button>` : ""}
+      <label>Search
+        <input data-library-search type="search" value="${escapeAttr(state.librarySearch)}" placeholder="Exercise name" />
+      </label>
+      ${renderTagFilter("library", state.libraryTagFilters)}
+      <label>Sort
+        <select data-library-sort>
+          <option value="name" ${state.librarySort === "name" ? "selected" : ""}>Name A-Z</option>
+          <option value="type" ${state.librarySort === "type" ? "selected" : ""}>Type</option>
+          <option value="muscle" ${state.librarySort === "muscle" ? "selected" : ""}>Primary tag</option>
+        </select>
+      </label>
+      <strong class="library-count">${activities.length} of ${total}</strong>
     </div>
     <div class="activity-grid">
-      ${activities.length ? activities.map((activity) => renderLibraryActivityCard(activity)).join("") : `<div class="empty">No custom activity entries yet.</div>`}
+      ${activities.length ? activities.map((activity) => renderLibraryActivityCard(activity)).join("") : `<div class="empty">No exercises match those filters.</div>`}
+    </div>
+  `;
+}
+
+function renderTagFilter(scope, selectedTags) {
+  return `
+    <div class="tag-filter" role="group" aria-label="Tags">
+      <div class="tag-filter-title">Tags</div>
+      <div class="tag-filter-options">
+        ${filterTagOptions.map(({ id, label }) => `
+          <label class="tag-filter-option ${selectedTags.includes(id) ? "active" : ""}">
+            <input type="checkbox" data-${scope}-tag="${escapeAttr(id)}" ${selectedTags.includes(id) ? "checked" : ""} />
+            <span>${label}</span>
+          </label>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderActivityTagPicker(selectedTags = []) {
+  return `
+    <div class="tag-filter" role="group" aria-label="Tags">
+      <div class="tag-filter-title">Tags</div>
+      <div class="tag-filter-options">
+        ${filterTagOptions.map(({ id, label }) => `
+          <label class="tag-filter-option ${selectedTags.includes(id) ? "active" : ""}">
+            <input type="checkbox" name="tags" value="${escapeAttr(id)}" ${selectedTags.includes(id) ? "checked" : ""} />
+            <span>${label}</span>
+          </label>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -535,21 +907,45 @@ function renderLibraryActivityCard(activity) {
   return `
     <div class="swipe-library ${isOpen ? "open" : ""} ${editable ? "" : "locked"}" ${editable ? `data-swipe-library="${activity.id}"` : ""}>
       ${editable ? `<button class="swipe-delete" data-delete-library-activity="${activity.id}" type="button">Delete</button>` : ""}
-      <article class="card grid library-card">
+      <article class="card grid library-card" data-open-library-detail="${activity.id}" role="button" tabindex="0">
         <div class="library-card-head">
           <div>
             <h3>${escapeHtml(activity.name)}</h3>
-            <p class="muted">${activity.type}${activity.custom ? " · Custom" : ""}</p>
+            <p class="muted">${activityType(activity)}${activity.custom ? " · Custom" : ""}</p>
           </div>
           ${editable ? `<button class="icon-btn library-edit" title="Edit" aria-label="Edit ${escapeAttr(activity.name)}" data-modal="library-activity" data-activity-id="${activity.id}">${pencilIcon()}</button>` : `<span class="library-lock">Built-in</span>`}
         </div>
-        <div class="chips">${activity.muscles.map((muscle) => `<span class="chip">${muscleLabels[muscle]}</span>`).join("")}</div>
+        <div class="chips">${activityTags(activity).map((tag) => `<span class="chip">${tagLabel(tag)}</span>`).join("")}</div>
         <div class="template-fields">
           ${Object.entries(activity.defaults || {}).map(([key, value]) => `
             <span class="library-default">${templateFieldLabel(key)}: ${value}</span>
           `).join("")}
         </div>
       </article>
+    </div>
+  `;
+}
+
+function renderLibraryActivityDetail(activity) {
+  return `
+    <div class="modal">
+      <div class="modal-panel">
+        <div class="library-detail-head">
+          <div>
+            <h2>${escapeHtml(activity.name)}</h2>
+            <p class="muted">${activityType(activity)}${activity.custom ? " · Custom" : " · Built-in"}</p>
+          </div>
+          <div class="toolbar modal-head-actions">
+            ${isCustomActivity(activity) ? `<button class="btn secondary" type="button" data-modal="library-activity" data-activity-id="${activity.id}">Edit</button>` : ""}
+            <button class="btn secondary" type="button" data-close-modal>Close</button>
+          </div>
+        </div>
+        <div class="chips">${activityTags(activity).map((tag) => `<span class="chip">${tagLabel(tag)}</span>`).join("")}</div>
+        <div class="description-panel">
+          <h3>Description</h3>
+          <p>${escapeHtml(activity.description || "No description has been added for this exercise yet.")}</p>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -701,7 +1097,7 @@ function renderBodyMap(muscleScores) {
       <circle class="muscle" cx="75" cy="28" r="20"></circle>
       <rect class="${cls("shoulders")}" x="34" y="54" width="82" height="25" rx="12"></rect>
       <rect class="${cls("chest")}" x="48" y="78" width="54" height="42" rx="12"></rect>
-      <rect class="${cls("core")}" x="52" y="119" width="46" height="55" rx="12"></rect>
+      <rect class="${cls("abs")}" x="52" y="119" width="46" height="55" rx="12"></rect>
       <rect class="${cls("biceps")}" x="20" y="82" width="22" height="70" rx="11"></rect>
       <rect class="${cls("triceps")}" x="108" y="82" width="22" height="70" rx="11"></rect>
       <rect class="${cls("glutes")}" x="50" y="174" width="50" height="28" rx="12"></rect>
@@ -717,13 +1113,14 @@ function renderBodyMap(muscleScores) {
 function renderModal() {
   if (state.modal.type === "workout") {
     const workout = state.modal.workout;
+    const onboarding = state.modal.onboarding && !workout;
     return `
       <div class="modal">
         <form class="modal-panel" data-action="save-workout">
-          <h2>${workout ? "Edit workout" : "New workout"}</h2>
+          <h2>${workout ? "Edit workout" : onboarding ? "Let's get started by creating a workout" : "New workout"}</h2>
           <input type="hidden" name="id" value="${workout?.id || ""}" />
-          <label>Name<input name="name" required value="${escapeAttr(workout?.name || "")}" placeholder="Leg day" /></label>
-          <label>Goal<textarea name="goal" placeholder="Strength, conditioning, mobility...">${escapeHtml(workout?.goal || "")}</textarea></label>
+          <label>${onboarding ? "What's the name of the workout?" : "Name"}<input name="name" required value="${escapeAttr(workout?.name || "")}" placeholder="Leg day" /></label>
+          <label>${onboarding ? "List the goals for the workout" : "Goal"}<textarea name="goal" placeholder="Strength, conditioning, mobility...">${escapeHtml(workout?.goal || "")}</textarea></label>
           <div class="toolbar">
             <button class="btn" type="submit">Save</button>
             <button class="btn secondary" type="button" data-close-modal>Cancel</button>
@@ -735,44 +1132,77 @@ function renderModal() {
   if (state.modal.type === "library-activity") {
     return renderLibraryActivityModal(state.modal.activity);
   }
+  if (state.modal.type === "library-detail") {
+    return renderLibraryActivityDetail(state.modal.activity);
+  }
+  if (state.modal.type === "custom-activity") {
+    return renderCustomActivityModal(state.modal.workoutId);
+  }
   const workout = store.workouts.find((item) => item.id === state.modal.workoutId);
+  const activities = pickerActivities();
+  const total = availableActivities().length;
   return `
     <div class="modal">
       <div class="modal-panel">
-        <h2>Add activity to ${escapeHtml(workout.name)}</h2>
-        <form class="custom-activity-form" data-action="create-activity">
-          <input type="hidden" name="workoutId" value="${workout.id}" />
-          <div class="custom-activity-head">
-            <h3>Custom activity</h3>
-            <button class="btn" type="submit">Create</button>
+        <div class="custom-activity-head">
+          <h2>Add activity to ${escapeHtml(workout.name)}</h2>
+          <div class="toolbar modal-head-actions">
+            <button class="btn secondary" type="button" data-open-custom-activity="${workout.id}">Create custom</button>
+            <button class="btn secondary" type="button" data-close-modal>Cancel</button>
           </div>
-          <label>Name<input name="name" required placeholder="Incline dumbbell press" /></label>
-          <label>Type
-            <select name="type" required>
-              <option value="Weight lifting">Weight lifting</option>
-              <option value="Cardio">Cardio</option>
-              <option value="Stretching">Stretching</option>
+        </div>
+        <div class="picker-tools">
+          <div class="tabs picker-source-filter">
+            <button data-picker-source="all" class="${state.pickerSourceFilter === "all" ? "active" : ""}">All</button>
+            <button data-picker-source="built-in" class="${state.pickerSourceFilter === "built-in" ? "active" : ""}">Built-in</button>
+            <button data-picker-source="custom" class="${state.pickerSourceFilter === "custom" ? "active" : ""}">Custom</button>
+          </div>
+          <label>Search
+            <input data-picker-search type="search" value="${escapeAttr(state.pickerSearch)}" placeholder="Exercise name" />
+          </label>
+          ${renderTagFilter("picker", state.pickerTagFilters)}
+          <label>Sort
+            <select data-picker-sort>
+              <option value="name" ${state.pickerSort === "name" ? "selected" : ""}>Name A-Z</option>
+              <option value="source" ${state.pickerSort === "source" ? "selected" : ""}>Built-in/Custom</option>
+              <option value="type" ${state.pickerSort === "type" ? "selected" : ""}>Type</option>
+              <option value="muscle" ${state.pickerSort === "muscle" ? "selected" : ""}>Primary tag</option>
             </select>
           </label>
-          <div class="muscle-picker" aria-label="Muscles worked">
-            ${Object.entries(muscleLabels).map(([id, label]) => `
-              <label class="muscle-option">
-                <input type="checkbox" name="muscles" value="${id}" />
-                <span>${label}</span>
-              </label>
-            `).join("")}
-          </div>
-        </form>
+          <strong class="library-count">${activities.length} of ${total}</strong>
+        </div>
         <div class="activity-grid">
-          ${availableActivities().map((activity) => `
+          ${activities.length ? activities.map((activity) => `
             <button class="activity-pick" data-add-activity="${activity.id}" data-workout-id="${workout.id}">
               <strong>${activity.name}</strong>
-              <p class="muted">${activity.type}</p>
+              <p class="muted">${activityType(activity)} · ${sourceLabel(activity)}</p>
             </button>
-          `).join("")}
+          `).join("") : `<div class="empty">No exercises match those filters.</div>`}
         </div>
-        <button class="btn secondary" data-close-modal>Cancel</button>
       </div>
+    </div>
+  `;
+}
+
+function renderCustomActivityModal(workoutId) {
+  const workout = store.workouts.find((item) => item.id === workoutId);
+  return `
+    <div class="modal">
+      <form class="modal-panel" data-action="create-activity">
+        <div>
+          <button class="btn ghost back-action" type="button" data-back-to-activity-picker="${workoutId}">Back</button>
+          <h2>Create custom activity</h2>
+          <p class="muted">${workout ? `Add it to ${escapeHtml(workout.name)} after saving.` : "Create a reusable custom exercise."}</p>
+        </div>
+        <input type="hidden" name="workoutId" value="${workoutId || ""}" />
+        <label>Name<input name="name" required placeholder="Incline dumbbell press" /></label>
+        <label>Description<textarea name="description" placeholder="What should the athlete know before doing this exercise?"></textarea></label>
+        ${renderActivityTagPicker(["Weight lifting"])}
+        <div class="toolbar">
+          <button class="btn" type="submit">Create custom</button>
+          <button class="btn secondary" type="button" data-close-modal>Cancel</button>
+        </div>
+      </form>
     </div>
   `;
 }
@@ -785,24 +1215,13 @@ function renderLibraryActivityModal(activity) {
         <h2>${activity ? "Edit activity" : "New activity"}</h2>
         <input type="hidden" name="id" value="${activity?.id || ""}" />
         <label>Name<input name="name" required value="${escapeAttr(activity?.name || "")}" placeholder="Incline dumbbell press" /></label>
-        <label>Type
-          <select name="type" required>
-            ${["Weight lifting", "Cardio", "Stretching"].map((type) => `<option value="${type}" ${activity?.type === type ? "selected" : ""}>${type}</option>`).join("")}
-          </select>
-        </label>
+        <label>Description<textarea name="description" placeholder="What should the athlete know before doing this exercise?">${escapeHtml(activity?.description || "")}</textarea></label>
+        ${renderActivityTagPicker(activity ? activityTags(activity) : ["Weight lifting"])}
         <div class="template-fields">
           ${["sets", "reps", "load", "time", "distance"].map((field) => `
             <label class="template-field">
               <span>${templateFieldLabel(field)}</span>
               <input name="${field}" type="number" min="0" step="${fieldStep(field)}" value="${defaults[field] || 0}" />
-            </label>
-          `).join("")}
-        </div>
-        <div class="muscle-picker" aria-label="Muscles worked">
-          ${Object.entries(muscleLabels).map(([id, label]) => `
-            <label class="muscle-option">
-              <input type="checkbox" name="muscles" value="${id}" ${activity?.muscles?.includes(id) ? "checked" : ""} />
-              <span>${label}</span>
             </label>
           `).join("")}
         </div>
@@ -852,6 +1271,59 @@ function bindEvents() {
       render();
     });
   });
+  document.querySelectorAll("[data-library-search]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const cursor = input.selectionStart;
+      state.librarySearch = input.value;
+      state.openSwipeLibraryActivityId = null;
+      render();
+      const nextInput = document.querySelector("[data-library-search]");
+      nextInput?.focus();
+      nextInput?.setSelectionRange(cursor, cursor);
+    });
+  });
+  document.querySelectorAll("[data-library-tag]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.libraryTagFilters = toggleTagFilter(state.libraryTagFilters, input.dataset.libraryTag);
+      state.openSwipeLibraryActivityId = null;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-library-sort]").forEach((select) => {
+    select.addEventListener("change", () => {
+      state.librarySort = select.value;
+      state.openSwipeLibraryActivityId = null;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-picker-source]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.pickerSourceFilter = button.dataset.pickerSource;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-picker-search]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const cursor = input.selectionStart;
+      state.pickerSearch = input.value;
+      render();
+      const nextInput = document.querySelector("[data-picker-search]");
+      nextInput?.focus();
+      nextInput?.setSelectionRange(cursor, cursor);
+    });
+  });
+  document.querySelectorAll("[data-picker-tag]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.pickerTagFilters = toggleTagFilter(state.pickerTagFilters, input.dataset.pickerTag);
+      render();
+    });
+  });
+  document.querySelectorAll("[data-picker-sort]").forEach((select) => {
+    select.addEventListener("change", () => {
+      state.pickerSort = select.value;
+      render();
+    });
+  });
   document.querySelectorAll("form[data-action]").forEach((form) => {
     form.addEventListener("submit", handleForm);
   });
@@ -859,6 +1331,19 @@ function bindEvents() {
   document.querySelectorAll("[data-modal='workout']").forEach((button) => button.addEventListener("click", () => openWorkoutModal()));
   document.querySelectorAll("[data-modal='activity']").forEach((button) => button.addEventListener("click", () => openActivityModal(button.dataset.workoutId)));
   document.querySelectorAll("[data-modal='library-activity']").forEach((button) => button.addEventListener("click", () => openLibraryActivityModal(button.dataset.activityId)));
+  document.querySelectorAll("[data-open-library-detail]").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      openLibraryActivityDetail(card.dataset.openLibraryDetail);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openLibraryActivityDetail(card.dataset.openLibraryDetail);
+    });
+  });
+  document.querySelectorAll("[data-open-custom-activity]").forEach((button) => button.addEventListener("click", () => openCustomActivityModal(button.dataset.openCustomActivity)));
+  document.querySelectorAll("[data-back-to-activity-picker]").forEach((button) => button.addEventListener("click", () => reopenActivityPicker(button.dataset.backToActivityPicker)));
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
   document.querySelectorAll("[data-select-workout]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -938,11 +1423,14 @@ function bindEvents() {
 function handleForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type='submit']");
+  if (submitButton) submitButton.disabled = true;
   const data = Object.fromEntries(new FormData(form).entries());
   const action = form.dataset.action;
   if (action === "login") login(data);
   if (action === "register") register(data);
   if (action === "reset") resetPassword(data);
+  if (action === "update-password") updatePassword(data);
   if (action === "save-workout") saveWorkout(data);
   if (action === "create-activity") createCustomActivity(form, data);
   if (action === "save-library-activity") saveLibraryActivity(form, data);
@@ -1042,45 +1530,67 @@ function bindLibrarySwipeRow(row) {
   });
 }
 
-function login({ email, password }) {
-  const user = store.users.find((item) => item.email.toLowerCase() === email.toLowerCase() && item.password === password);
-  if (!user) return showToast("Those login details did not match a user.");
-  if (!user.verified) return showToast("Please verify your email before logging on.");
-  state.currentUserId = user.id;
-  state.selectedWorkoutId = userWorkouts()[0]?.id || null;
-  showToast("Logged on successfully.");
-  render();
-}
-
-function register({ name, email, password }) {
-  if (store.users.some((user) => user.email.toLowerCase() === email.toLowerCase())) {
-    return showToast("That email is already registered.");
+async function login({ email, password }) {
+  if (!authClient) return showToast("Supabase Auth is not available. Check the app connection.");
+  const { data, error } = await authClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    const message = error.message.toLowerCase().includes("email not confirmed")
+      ? "Please verify your email before logging on."
+      : error.message;
+    if (message.includes("verify")) {
+      state.authMode = "verify";
+      state.pendingVerificationEmail = email;
+      render();
+    }
+    return showToast(message);
   }
-  const user = { id: crypto.randomUUID(), name, email, password, verified: true };
-  store.users.push(user);
-  store.workouts.push(
-    ...starterWorkouts.map((workout) => ({
-      ...workout,
-      id: crypto.randomUUID(),
-      userId: user.id,
-      activities: workout.activities.map((activity) => ({ ...activity, id: crypto.randomUUID() }))
-    }))
-  );
-  saveStore();
-  state.currentUserId = user.id;
-  state.selectedWorkoutId = userWorkouts()[0]?.id || null;
-  showToast("Account created. Email verification simulated as complete.");
+  applyAuthSession(data.session, false);
+  showToast("Logged on successfully.");
+}
+
+async function register({ name, email, password }) {
+  if (!authClient) return showToast("Supabase Auth is not available. Check the app connection.");
+  const { error } = await authClient.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { name },
+      emailRedirectTo: window.location.origin + window.location.pathname
+    }
+  });
+  if (error) return showToast(error.message);
+  state.authMode = "verify";
+  state.pendingVerificationEmail = email;
+  showToast("Account created. Check your email to verify it.");
   render();
 }
 
-function resetPassword({ email }) {
-  const exists = store.users.some((user) => user.email.toLowerCase() === email.toLowerCase());
-  showToast(exists ? "Password reset link simulated. Check your email flow in production." : "If that email exists, a reset link will be sent.");
+async function resetPassword({ email }) {
+  if (!authClient) return showToast("Supabase Auth is not available. Check the app connection.");
+  const { error } = await authClient.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}${window.location.pathname}?auth=recovery`
+  });
+  if (error) return showToast(error.message);
+  showToast("If that email exists, a reset link will be sent.");
 }
 
-function logout() {
+async function updatePassword({ password, confirmPassword }) {
+  if (!authClient) return showToast("Supabase Auth is not available. Check the app connection.");
+  if (password !== confirmPassword) return showToast("Those passwords do not match.");
+  const { error } = await authClient.auth.updateUser({ password });
+  if (error) return showToast(error.message);
+  state.passwordRecovery = false;
+  state.currentUserId = null;
+  state.authMode = "login";
+  await authClient.auth.signOut();
+  showToast("Password updated. Please log on with your new password.");
+}
+
+async function logout() {
+  if (authClient) await authClient.auth.signOut();
   cancelTimer();
   state.currentUserId = null;
+  state.passwordRecovery = false;
   state.activeSession = null;
   state.screen = "dashboard";
   state.workoutsMode = "list";
@@ -1092,13 +1602,39 @@ function logout() {
 
 function openWorkoutModal(workoutId) {
   const workout = store.workouts.find((item) => item.id === workoutId);
-  state.modal = { type: "workout", workout };
+  state.modal = { type: "workout", workout, onboarding: !workout && !userWorkouts().length };
   render();
 }
 
 function openActivityModal(workoutId) {
+  resetPickerFilters();
   state.modal = { type: "activity", workoutId };
   render();
+}
+
+function reopenActivityPicker(workoutId) {
+  state.modal = { type: "activity", workoutId };
+  render();
+}
+
+function openCustomActivityModal(workoutId) {
+  state.modal = { type: "custom-activity", workoutId };
+  render();
+}
+
+function openLibraryActivityDetail(activityId) {
+  const activity = activityById(activityId);
+  if (!activity) return;
+  state.openSwipeLibraryActivityId = null;
+  state.modal = { type: "library-detail", activity };
+  render();
+}
+
+function resetPickerFilters() {
+  state.pickerSearch = "";
+  state.pickerSourceFilter = "all";
+  state.pickerTagFilters = [];
+  state.pickerSort = "name";
 }
 
 function openLibraryActivityModal(activityId) {
@@ -1161,23 +1697,26 @@ function deleteSession(sessionId) {
 }
 
 function saveLibraryActivity(form, data) {
-  const muscles = new FormData(form).getAll("muscles");
-  const defaults = defaultsFromForm(data);
+  const tags = tagsFromForm(form);
+  const type = typeFromTags(tags);
+  const defaults = defaultsFromForm(data, type);
   if (data.id) {
     const activity = activityById(data.id);
     if (!activity) return;
     if (!isCustomActivity(activity)) return;
     activity.name = data.name.trim();
-    activity.type = data.type;
-    activity.muscles = muscles.length ? muscles : defaultMusclesForType(data.type);
+    activity.description = data.description.trim();
+    activity.tags = tags;
+    delete activity.type;
+    delete activity.muscles;
     activity.defaults = defaults;
     activity.custom = activity.custom || Boolean(activity.userId);
   } else {
     store.activities.push({
       id: crypto.randomUUID(),
       name: data.name.trim(),
-      type: data.type,
-      muscles: muscles.length ? muscles : defaultMusclesForType(data.type),
+      description: data.description.trim(),
+      tags,
       defaults,
       custom: true,
       userId: state.currentUserId
@@ -1189,7 +1728,13 @@ function saveLibraryActivity(form, data) {
   render();
 }
 
-function defaultsFromForm(data) {
+function tagsFromForm(form) {
+  const tags = normalizeStoredTags(new FormData(form).getAll("tags"));
+  if (activityTypeTags.some((tag) => tags.includes(tag))) return tags;
+  return ["Weight lifting", ...tags];
+}
+
+function defaultsFromForm(data, type) {
   const base = {
     sets: Number(data.sets || 0),
     reps: Number(data.reps || 0),
@@ -1197,8 +1742,8 @@ function defaultsFromForm(data) {
     time: Number(data.time || 0),
     distance: Number(data.distance || 0)
   };
-  if (data.type === "Cardio") return { time: base.time || 10, distance: base.distance || 1 };
-  if (data.type === "Stretching") return { sets: base.sets || 2, time: base.time || 1, reps: base.reps || 0 };
+  if (type === "Cardio") return { time: base.time || 10, distance: base.distance || 1 };
+  if (type === "Stretching") return { sets: base.sets || 2, time: base.time || 1, reps: base.reps || 0 };
   return { sets: base.sets || 3, reps: base.reps || 10, load: base.load || 0 };
 }
 
@@ -1226,13 +1771,14 @@ function addActivity(workoutId, activityId) {
 }
 
 function createCustomActivity(form, data) {
-  const muscles = new FormData(form).getAll("muscles");
+  const tags = tagsFromForm(form);
+  const type = typeFromTags(tags);
   const activity = {
     id: crypto.randomUUID(),
     name: data.name.trim(),
-    type: data.type,
-    muscles: muscles.length ? muscles : defaultMusclesForType(data.type),
-    defaults: defaultActivityTarget(data.type),
+    description: data.description.trim(),
+    tags,
+    defaults: defaultActivityTarget(type),
     custom: true,
     userId: state.currentUserId
   };
@@ -1245,12 +1791,6 @@ function defaultActivityTarget(type) {
   if (type === "Cardio") return { time: 10, distance: 1 };
   if (type === "Stretching") return { sets: 2, time: 1, reps: 0 };
   return { sets: 3, reps: 10, load: 0 };
-}
-
-function defaultMusclesForType(type) {
-  if (type === "Cardio") return ["quads", "hamstrings", "calves"];
-  if (type === "Stretching") return ["core"];
-  return ["chest"];
 }
 
 function removeActivity(workoutId, templateActivityId) {
@@ -1282,18 +1822,19 @@ function startWorkout(workoutId) {
     workoutName: workout.name,
     entries: workout.activities.map((item) => {
       const activity = activityById(item.activityId);
+      const type = activityType(activity);
       return {
         id: crypto.randomUUID(),
         activityId: activity.id,
         activityName: activity.name,
-        muscles: activity.muscles,
-        type: activity.type,
+        muscles: activityMuscles(activity),
+        type,
         sets: item.target.sets || 0,
         reps: item.target.reps || 0,
         time: item.target.time || 0,
         distance: item.target.distance || 0,
         load: item.target.load || 0,
-        setRows: buildSetRows(activity.type, item.target)
+        setRows: buildSetRows(type, item.target)
       };
     })
   };
@@ -1518,7 +2059,7 @@ function completedRowScore(entry, row) {
 }
 
 function uniqueMuscles(workout) {
-  return [...new Set(workout.activities.flatMap((item) => activityById(item.activityId).muscles))];
+  return [...new Set(workout.activities.flatMap((item) => activityMuscles(activityById(item.activityId))))];
 }
 
 function labelMetric(metric) {
@@ -1541,7 +2082,9 @@ function formatDuration(seconds) {
 
 function showToast(message) {
   state.toast = message;
-  setTimeout(() => {
+  if (toastTimer) clearTimeout(toastTimer);
+  render();
+  toastTimer = setTimeout(() => {
     state.toast = "";
     render();
   }, 3000);
@@ -1561,3 +2104,4 @@ function escapeAttr(value) {
 }
 
 render();
+initAuth();
