@@ -1,38 +1,47 @@
 # WorkoutStudio
 
-A browser-ready prototype for a multi-user weight training SaaS product.
+A browser-ready SaaS prototype for building, tracking, and reviewing workouts across desktop and mobile.
 
 ## Run it
 
-Open `index.html` directly in a browser, or serve the folder locally:
+Serve the folder locally:
 
 ```sh
-python3 -m http.server 5173
+npm start
 ```
 
-Then visit `http://127.0.0.1:5173`.
+Then visit `http://127.0.0.1:5174`.
 
-## Demo login
+Do not open `index.html` directly with a `file://` URL. Supabase authentication and cross-device sync need the app to run from a web address.
 
-- Email: `demo@workoutstudio.local`
-- Password: `demo123`
+## Supabase setup
+
+Authentication is wired to Supabase. To sync workouts, custom activities, and sessions across devices, run `supabase-schema.sql` in the Supabase SQL Editor for the connected project.
+
+The schema creates:
+
+- `workoutstudio_profiles`
+- `workoutstudio_workouts`
+- `workoutstudio_custom_activities`
+- `workoutstudio_sessions`
+
+Each table has row-level security so signed-in users can only access their own data.
 
 ## Included
 
-- User registration, simulated email verification, logon, and password reset flow.
-- Multiple users with separate workout templates and sessions in browser storage.
+- Supabase registration, email confirmation, logon, password recovery, and sign out.
+- Cross-device cloud sync for each user's workouts, custom activities, and completed sessions once the schema is installed.
 - Create, update, delete, and list workout templates.
-- Seeded activity library for stretching, cardio, and weight lifting.
+- Built-in TrainingPeaks exercise library with searchable tags and exercise instructions.
 - Workout session timer with sets, reps, time, distance, and load entry.
 - Previous best metrics per activity.
 - Completion summary with muscles worked and a simple human body map.
 
 ## Production Notes
 
-This is a front-end prototype. To turn it into a real SaaS product, replace the local browser store with a backend and add:
+Next production steps:
 
-- Auth provider or server-managed auth with real email verification and password reset.
-- Database tables for tenants, users, activities, workouts, workout activities, sessions, and session entries.
-- Server-side authorization so users can only access their own data.
-- A curated exercise taxonomy and muscle mapping source rather than the starter activity list.
-- Analytics over session history for progress charts, personal records, and training load trends.
+- Move Supabase project URL and public anon key into environment-specific config for each deployment.
+- Add hosted deployment previews and production build tooling.
+- Add account settings, profile management, and data export/delete controls.
+- Add deeper analytics over session history for progress charts, personal records, and training load trends.

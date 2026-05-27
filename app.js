@@ -2,6 +2,12 @@ const activityTypeTags = ["Weight lifting", "Cardio", "Stretching"];
 const allowedMuscleTags = ["chest", "back", "shoulders", "biceps", "triceps", "abs", "glutes", "quads", "hamstrings", "calves", "cardio"];
 const supabaseProjectUrl = "https://npllwuavofpfudchotma.supabase.co";
 const supabaseAnonKey = "sb_publishable_q_yZF9APuTUsGfHu8N7avA_QbAxS3KY";
+const cloudTables = {
+  profiles: "workoutstudio_profiles",
+  workouts: "workoutstudio_workouts",
+  activities: "workoutstudio_custom_activities",
+  sessions: "workoutstudio_sessions"
+};
 const authClient = window.supabase?.createClient(supabaseProjectUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
@@ -126,6 +132,8 @@ const state = {
   tick: null,
   modal: null,
   toast: "",
+  syncStatus: "local",
+  syncMessage: "Saved on this device.",
   librarySearch: "",
   libraryTagFilters: [],
   librarySort: "name",
@@ -137,6 +145,9 @@ const state = {
 
 const store = loadStore();
 let toastTimer = null;
+let syncTimer = null;
+let syncInFlight = false;
+let syncPending = false;
 
 function templateActivity(activityId) {
   const source = seedActivities.find((item) => item.id === activityId) || activityById(activityId);
@@ -168,6 +179,11 @@ function loadStore() {
 }
 
 function saveStore() {
+  saveLocalStore();
+  queueCloudSave();
+}
+
+function saveLocalStore() {
   localStorage.setItem("workoutstudio-store", JSON.stringify(store));
 }
 
@@ -241,13 +257,15 @@ async function initAuth() {
     enterPasswordRecovery();
     return;
   }
-  applyAuthSession(data.session, false);
+  await applyAuthSession(data.session, true);
 }
 
-function applyAuthSession(session, shouldRender = true) {
+async function applyAuthSession(session, shouldRender = true) {
   state.authLoading = false;
   if (!session?.user) {
     state.currentUserId = null;
+    state.syncStatus = "local";
+    state.syncMessage = "Sign in to sync across devices.";
     if (shouldRender) render();
     return;
   }
@@ -259,9 +277,18 @@ function applyAuthSession(session, shouldRender = true) {
   state.currentUserId = user.id;
   state.pendingVerificationEmail = "";
   state.authMode = "login";
-  state.selectedWorkoutId = userWorkouts()[0]?.id || null;
+  state.syncStatus = "syncing";
+  state.syncMessage = "Syncing your account...";
+  if (shouldRender) render();
+  try {
+    await loadCloudData();
+  } catch (error) {
+    state.syncStatus = "local";
+    state.syncMessage = "Cloud sync is not set up yet. Changes are saved on this device.";
+  }
   showFirstWorkoutPromptIfNeeded();
-  saveStore();
+  state.selectedWorkoutId = userWorkouts()[0]?.id || null;
+  saveLocalStore();
   if (shouldRender) render();
 }
 
@@ -307,6 +334,96 @@ function showFirstWorkoutPromptIfNeeded() {
   state.modal = { type: "workout", workout: null, onboarding: true };
 }
 
+async function loadCloudData() {
+  if (!authClient || !state.currentUserId) return;
+  const userId = state.currentUserId;
+  const [workoutResult, activityResult, sessionResult] = await Promise.all([
+    authClient.from(cloudTables.workouts).select("data").eq("user_id", userId),
+    authClient.from(cloudTables.activities).select("data").eq("user_id", userId),
+    authClient.from(cloudTables.sessions).select("data").eq("user_id", userId)
+  ]);
+  const error = workoutResult.error || activityResult.error || sessionResult.error;
+  if (error) throw error;
+
+  store.workouts = [
+    ...store.workouts.filter((workout) => workout.userId !== userId),
+    ...workoutResult.data.map((row) => ({ ...row.data, userId }))
+  ];
+  store.activities = [
+    ...seedActivities,
+    ...store.activities.filter((activity) => isCustomActivityData(activity) && activity.userId !== userId),
+    ...activityResult.data.map((row) => ({ ...row.data, userId, custom: true }))
+  ];
+  store.sessions = [
+    ...store.sessions.filter((session) => session.userId !== userId),
+    ...sessionResult.data.map((row) => ({ ...row.data, userId }))
+  ];
+  state.syncStatus = "synced";
+  state.syncMessage = "Synced across devices.";
+  saveLocalStore();
+}
+
+function queueCloudSave() {
+  if (!authClient || !state.currentUserId) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    syncUserData();
+  }, 400);
+}
+
+async function syncUserData() {
+  if (!authClient || !state.currentUserId) return;
+  if (syncInFlight) {
+    syncPending = true;
+    return;
+  }
+  syncInFlight = true;
+  syncPending = false;
+  state.syncStatus = "syncing";
+  state.syncMessage = "Saving to cloud...";
+  const userId = state.currentUserId;
+  try {
+    await upsertProfile();
+    await replaceUserRows(cloudTables.workouts, userWorkouts());
+    await replaceUserRows(cloudTables.activities, userCustomActivities());
+    await replaceUserRows(cloudTables.sessions, userSessions());
+    state.syncStatus = "synced";
+    state.syncMessage = "Synced across devices.";
+  } catch (error) {
+    state.syncStatus = "local";
+    state.syncMessage = "Cloud sync is not set up yet. Changes are saved on this device.";
+  } finally {
+    syncInFlight = false;
+    if (syncPending && state.currentUserId === userId) syncUserData();
+  }
+}
+
+async function upsertProfile() {
+  const user = currentUser();
+  if (!user) return;
+  const { error } = await authClient.from(cloudTables.profiles).upsert({
+    id: user.id,
+    email: user.email,
+    full_name: user.name,
+    updated_at: new Date().toISOString()
+  });
+  if (error) throw error;
+}
+
+async function replaceUserRows(tableName, items) {
+  const userId = state.currentUserId;
+  const deleteResult = await authClient.from(tableName).delete().eq("user_id", userId);
+  if (deleteResult.error) throw deleteResult.error;
+  if (!items.length) return;
+  const insertResult = await authClient.from(tableName).insert(items.map((item) => ({
+    id: item.id,
+    user_id: userId,
+    data: item,
+    updated_at: new Date().toISOString()
+  })));
+  if (insertResult.error) throw insertResult.error;
+}
+
 function currentUser() {
   return store.users.find((user) => user.id === state.currentUserId);
 }
@@ -317,6 +434,10 @@ function userWorkouts() {
 
 function userSessions() {
   return store.sessions.filter((session) => session.userId === state.currentUserId);
+}
+
+function userCustomActivities() {
+  return store.activities.filter((activity) => isCustomActivity(activity));
 }
 
 function selectedWorkout() {
@@ -540,6 +661,7 @@ function renderShell() {
           <span>WorkoutStudio</span>
         </div>
         <div class="account">
+          <span class="sync-pill ${state.syncStatus}" title="${escapeAttr(state.syncMessage)}">${escapeHtml(syncStatusLabel())}</span>
           <strong>${escapeHtml(user.name)}</strong>
           <button class="btn secondary" data-action="logout">Sign out</button>
         </div>
@@ -569,6 +691,12 @@ function renderHeaderAdd() {
 
 function navButton(screen, label) {
   return `<button data-screen="${screen}" class="${state.screen === screen ? "active" : ""}">${label}</button>`;
+}
+
+function syncStatusLabel() {
+  if (state.syncStatus === "synced") return "Synced";
+  if (state.syncStatus === "syncing") return "Syncing";
+  return "Local";
 }
 
 function renderScreen() {
